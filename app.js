@@ -4,10 +4,9 @@ const express = require("express");
 const bodyParser = require("body-parser");
 const ejs = require("ejs");
 const mongoose = require('mongoose');
-//const encrypt = require('mongoose-encryption');
-//const md5 = require('md5');   //nem ajánlott a használata
-const bcrypt = require('bcrypt');
-const saltRounds = 10;
+const session = require('express-session');
+const passport = require("passport");
+const passportLocalMongoose = require("passport-local-mongoose");
 
 
 
@@ -18,6 +17,15 @@ app.use(bodyParser.urlencoded({
   extended: true
 }));
 
+app.use(session({
+  secret: "Our little secret.",
+  resave: false,
+  saveUninitialized:false
+}));
+
+app.use(passport.initialize());
+app.use(passport.session());
+
 const mongoURL = 'mongodb://0.0.0.0:27017/userDB';
 mongoose.connect(mongoURL, { useNewUrlParser: true, useUnifiedTopology: true });
 
@@ -27,9 +35,14 @@ const userSchema = new mongoose.Schema({
 });
 
 
+userSchema.plugin(passportLocalMongoose);
 
+const User = new mongoose.model("User",userSchema);
+passport.use(User.createStrategy());
 
-const User = new mongoose.model("User",userSchema)
+passport.serializeUser(User.serializeUser());
+passport.deserializeUser(User.deserializeUser());
+
 
 app.get("/",function (req,res) {
   res.render("home");  
@@ -42,44 +55,49 @@ app.get("/login",function (req,res) {
 app.get("/register",function (req,res) {
   res.render("register");  
 });
-  
-app.post("/register",function (req,res) {
-  bcrypt.hash(req.body.password,saltRounds)
-  .then(function (hash) {
-    const newUser = new User({
-    email: req.body.username,
-    password: hash
-  });
-  newUser.save()
-  .then(function(){
-    res.render("secrets")
 
+app.get("/secrets",function (req,res) {
+  if (req.isAuthenticated()){
+    res.render("secrets");
+  } else {
+    res.redirect("login");
+  }
+});
+
+app.get('/logout', function(req, res, next){
+  req.logout(function(err) {
+    if (err) { return next(err); }
+    res.redirect('/');
+  });
+});
+
+app.post("/register",function (req,res) {
+  User.register({username: req.body.username}, req.body.password)   //a passport-local-mongoose segítségével lerövidíti a kódot
+  .then(function (user) {
+    passport.authenticate("local")(req,res,function () {    //ugyan az,mint a post login-nál
+      res.redirect("/secrets");
+    })
   })
   .catch(function (err) {
     console.log(err);
+    res.render("/register")
   });
-  })
-  .catch(function (err) {
-    console.log(err);
-  });
-   
   });
 
 app.post("/login",function (req,res) {
-const username = req.body.username;
-const password = req.body.password;
-User.findOne({email: username})
-.then(function (foundUser) {
-  
-   bcrypt.compare(password,foundUser.password)
-  .then(function(result) {
-    if (result === true) {
-      res.render("secrets");  
-    }
-}); 
-})
-.catch(function (err) {
-  console.log(err);
+  const user =new User({
+    username:req.body.username,
+    password: req.body.password
+  });
+  req.login(user, function(err) {   //it kénytelenek vagyunk call-back function-t használni, különben hibát dob
+    if (err) {
+        console.log(err);
+        req.redirect("/login");
+    } else {
+        passport.authenticate("local", {failureRedirect: "/login"})(req, res, function() {    //egy cookiet helyez el a gépünkön,hogyha et után csak szimplán a /secretset írnánk be akkor odavinne 
+            res.redirect("/secrets");
+        });
+    };
 });
 });
 
